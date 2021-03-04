@@ -121,63 +121,102 @@ const getLogListFromAzureStorage = async (
   taskAttemptId,
   tailMode,
 ) => {
-  const taskDetail = await task.get(
-    frameworkName,
-    Number(jobAttemptId),
-    taskRoleName,
-    Number(taskIndex),
-  );
-  const NoTaskLogErr = createError(
-    'Not Found',
-    'NoTaskLogError',
-    `Log of task is not found.`,
-  );
-  const taskStatus = taskDetail.data.attempts.find(
-    (attempt) => attempt.attemptId === Number(taskAttemptId),
-  );
-  if (!taskStatus || !taskStatus.containerIp) {
-    logger.error(`Failed to find task to retrive log or task not started`);
-    throw NoTaskLogErr;
-  }
+       const taskDetail = await task.get(
+         frameworkName,
+         Number(jobAttemptId),
+         taskRoleName,
+         Number(taskIndex),
+       );
+       const NoTaskLogErr = createError(
+         'Not Found',
+         'NoTaskLogError',
+         `Log of task is not found.`,
+       );
+       const taskStatus = taskDetail.data.attempts.find(
+         (attempt) => attempt.attemptId === Number(taskAttemptId),
+       );
+       if (!taskStatus || !taskStatus.containerIp) {
+         logger.error(`Failed to find task to retrive log or task not started`);
+         throw NoTaskLogErr;
+       }
 
-  const podUid = taskStatus.containerId;
+       const podUid = taskStatus.containerId;
 
-  const account = process.env.AZURE_STORAGE_ACCOUNT;
-  const accountKey = process.env.AZURE_STORAGE_ACCOUNT_KEY;
-  const sharedKeyCredential = new StorageSharedKeyCredential(
-    account,
-    accountKey,
-  );
-  const blobServiceClient = new BlobServiceClient(`https://${account}.blob.core.windows.net`, sharedKeyCredential);
-  const containerClient = blobServiceClient.getContainerClient('pai-log');
-  const ret = { locations: [] };
+       const account = process.env.AZURE_STORAGE_ACCOUNT;
+       const accountKey = process.env.AZURE_STORAGE_ACCOUNT_KEY;
+       const sharedKeyCredential = new StorageSharedKeyCredential(
+         account,
+         accountKey,
+       );
+       const blobServiceClient = new BlobServiceClient(
+         `https://${account}.blob.core.windows.net`,
+         sharedKeyCredential,
+       );
+       const containerClient = blobServiceClient.getContainerClient('pai-log');
+       const ret = { locations: [] };
 
-  const sasQueryString = generateBlobSASQueryParameters({
-    containerName: 'pai-log',
-    permissions: ContainerSASPermissions.parse("r"),
-    startsOn: new Date(new Date().valueOf() - 1000 * 60 * 10),
-    expiresOn: new Date(new Date().valueOf() + 1000 * 60 * 10), // 10min
-    protocol: SASProtocol.Https,
-  }, sharedKeyCredential);
-  for await (const blob of containerClient.listBlobsFlat({
-    prefix: `job-${podUid}`,
-  })) {
-    if (blob.name.endsWith('stdout.log')) {
-      if (tailMode !== 'true') {
-        ret.locations.push({
-          name: 'stdout',
-          uri: `${containerClient.url}/${blob.name}?${sasQueryString}`,
-        });
-      } else {
-        ret.locations.push({
-          name: 'stdout',
-          uri: `${WEBPORTAL_URL}/rest-server/api/v2/tail-logs/${blob.name}?${sasQueryString}`
-        })
-      }
-    }
-  }
-  return ret;
-};
+       const sasQueryString = generateBlobSASQueryParameters(
+         {
+           containerName: 'pai-log',
+           permissions: ContainerSASPermissions.parse('r'),
+           startsOn: new Date(new Date().valueOf() - 1000 * 60 * 10),
+           expiresOn: new Date(new Date().valueOf() + 1000 * 60 * 10), // 10min
+           protocol: SASProtocol.Https,
+         },
+         sharedKeyCredential,
+       );
+       for await (const blob of containerClient.listBlobsFlat({
+         prefix: `job-${podUid}`,
+       })) {
+         if (tailMode !== 'true') {
+           if (blob.name.endsWith('stdout.log')) {
+             ret.locations.push({
+               name: 'stdout',
+               uri: `${containerClient.url}/${blob.name}?${sasQueryString}`,
+             });
+           } else if (blob.name.endsWith('stderr.log')) {
+             ret.locations.push({
+               name: 'stderr',
+               uri: `${containerClient.url}/${blob.name}?${sasQueryString}`,
+             });
+           } else if (blob.name.endsWith('all.log')) {
+             ret.locations.push({
+               name: 'all',
+               uri: `${containerClient.url}/${blob.name}?${sasQueryString}`,
+             });
+           }
+         } else {
+           if (blob.name.endsWith('stdout.log')) {
+             ret.locations.push({
+               name: 'stdout',
+               uri: `${WEBPORTAL_URL}/rest-server/api/v2/tail-logs/${blob.name}?${sasQueryString}`,
+             });
+           } else if (blob.name.endsWith('stderr.log')) {
+             ret.locations.push({
+               name: 'stderr',
+               uri: `${WEBPORTAL_URL}/rest-server/api/v2/tail-logs/${blob.name}?${sasQueryString}`,
+             });
+           } else if (blob.name.endsWith('all.log')) {
+             ret.locations.push({
+               name: 'all',
+               uri: `${WEBPORTAL_URL}/rest-server/api/v2/tail-logs/${blob.name}?${sasQueryString}`,
+             });
+           }
+         }
+       }
+       for await (const blob of containerClient.listBlobsFlat({
+         prefix: `runtime-app-${podUid}`,
+       })) {
+         if (tailMode !== 'true') {
+           ret.locations.push({
+             name: 'runtime.log',
+             uri: `${containerClient.url}/${blob.name}?${sasQueryString}`,
+           });
+         }
+       }
+
+       return ret;
+     };
 
 const getLogListFromLogServer = async (
   frameworkName,
